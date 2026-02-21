@@ -1,0 +1,14 @@
+# Greenhouse public job board slugs
+# Add company slugs to fetch their public job listings.
+# Find slugs at: https://boards.greenhouse.io/{slug}
+companies:
+  - airbnb
+  - stripe
+  - figma
+  - notion
+  - gitlab
+  - hashicorp
+  - cockroachlabs
+  - airtable
+  - netlify
+  - linear
