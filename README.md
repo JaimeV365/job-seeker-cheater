@@ -34,7 +34,7 @@ cd job-seeker-cheater
 pip install -r requirements.txt
 
 # Launch the app
-streamlit run app.py
+python -m streamlit run app.py
 ```
 
 The app opens at `http://localhost:8501`.
