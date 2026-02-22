@@ -89,11 +89,11 @@ def _preference_fit_score(job: Job, prefs: Preferences) -> float:
         if any(t.lower() in title_lower for t in prefs.target_titles):
             score += 1.0
 
-    if prefs.remote_type:
+    if prefs.remote_types:
         checks += 1
-        if job.remote_type == prefs.remote_type:
+        if job.remote_type in prefs.remote_types:
             score += 1.0
-        elif job.remote_type == "remote" and prefs.remote_type in ("hybrid", ""):
+        elif job.remote_type == "remote" and "hybrid" in prefs.remote_types:
             score += 0.5
 
     if prefs.locations:

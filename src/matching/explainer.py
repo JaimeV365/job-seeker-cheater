@@ -55,8 +55,8 @@ def explain_match(
         reasons.append(f"Moderate text similarity ({sim_score:.0%})")
 
     # Remote match
-    if prefs.remote_type and job.remote_type == prefs.remote_type:
-        reasons.append(f"Matches your {prefs.remote_type} preference")
+    if prefs.remote_types and job.remote_type in prefs.remote_types:
+        reasons.append(f"Matches your {job.remote_type} preference")
 
     # Salary
     if job.salary_min and prefs.min_salary:

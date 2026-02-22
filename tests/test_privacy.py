@@ -20,7 +20,7 @@ def test_default_no_persistence(tmp_privacy_mgr):
 
 def test_save_and_load(tmp_privacy_mgr):
     profile = Profile(skills=["python", "sql"], years_experience=5, summary="Test")
-    prefs = Preferences(target_titles=["Engineer"], remote_type="remote")
+    prefs = Preferences(target_titles=["Engineer"], remote_types=["remote"])
 
     tmp_privacy_mgr.save_profile(profile, prefs)
     assert tmp_privacy_mgr.is_persisted()
