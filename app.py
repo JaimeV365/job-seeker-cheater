@@ -2,9 +2,10 @@ import csv
 import io
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src.cv.parser import parse_cv
-from src.cv.entities import build_profile
+from src.cv.entities import build_profile, extract_skills
 from src.matching.dedup import deduplicate
 from src.matching.explainer import explain_match
 from src.matching.filters import apply_hard_filters
@@ -26,13 +27,12 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
-# Hide Streamlit chrome (Deploy button, hamburger extras, screencast, footer)
+# CSS
 # ---------------------------------------------------------------------------
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@300;400;700&family=JetBrains+Mono:wght@400&display=swap');
 
-/* Hide Deploy button, main menu extras, footer */
 #MainMenu {visibility: hidden;}
 [data-testid="stStatusWidget"] {visibility: hidden;}
 footer {visibility: hidden;}
@@ -54,54 +54,30 @@ h1, h2, h3 { font-family: 'Fredoka One', cursive; color: var(--deep-blue); }
 
 .hero-title {
     font-family: 'Fredoka One', cursive;
-    font-size: 2.5rem;
-    color: var(--deep-blue);
-    margin-bottom: 0;
-    line-height: 1.2;
+    font-size: 2.5rem; color: var(--deep-blue);
+    margin-bottom: 0; line-height: 1.2;
 }
 .hero-cheater { color: var(--bordeaux); }
 .hero-tagline {
     font-family: 'Nunito', sans-serif;
-    font-size: 1.15rem;
-    color: var(--slate);
-    margin-top: 0.2rem;
-    margin-bottom: 0.5rem;
+    font-size: 1.15rem; color: var(--slate);
+    margin-top: 0.2rem; margin-bottom: 0.5rem;
 }
 
-/* Step indicator */
-.step-bar {
-    display: flex;
-    gap: 0;
-    margin-bottom: 1.2rem;
-}
+.step-bar { display: flex; gap: 0; margin-bottom: 1.2rem; }
 .step-item {
-    flex: 1;
-    text-align: center;
-    padding: 0.6rem 0.3rem;
-    font-size: 0.85rem;
-    font-weight: 700;
-    border-bottom: 4px solid #ddd;
-    color: var(--slate);
+    flex: 1; text-align: center; padding: 0.6rem 0.3rem;
+    font-size: 0.85rem; font-weight: 700;
+    border-bottom: 4px solid #ddd; color: var(--slate);
+    cursor: default;
 }
-.step-done {
-    border-bottom-color: var(--green);
-    color: var(--green);
-}
-.step-active {
-    border-bottom-color: var(--purple);
-    color: var(--purple);
-}
-.step-pending {
-    border-bottom-color: #ddd;
-    color: #bbb;
-}
+.step-done { border-bottom-color: var(--green); color: var(--green); }
+.step-active { border-bottom-color: var(--purple); color: var(--purple); }
+.step-pending { border-bottom-color: #ddd; color: #bbb; }
 
 .job-card {
-    background: white;
-    border-radius: 12px;
-    padding: 1.2rem;
-    margin-bottom: 1rem;
-    border-left: 5px solid var(--purple);
+    background: white; border-radius: 12px; padding: 1.2rem;
+    margin-bottom: 1rem; border-left: 5px solid var(--purple);
     box-shadow: 0 2px 8px rgba(0,0,0,0.06);
 }
 .job-card h3 { margin: 0 0 0.3rem 0; font-size: 1.1rem; }
@@ -109,47 +85,56 @@ h1, h2, h3 { font-family: 'Fredoka One', cursive; color: var(--deep-blue); }
 .job-card .meta { color: var(--slate); font-size: 0.85rem; }
 
 .score-badge {
-    display: inline-block;
-    background: var(--gold);
-    color: var(--deep-blue);
-    font-weight: 700;
-    border-radius: 50%;
+    display: inline-block; background: var(--gold); color: var(--deep-blue);
+    font-weight: 700; border-radius: 50%;
     width: 48px; height: 48px; line-height: 48px;
     text-align: center; font-size: 0.95rem;
 }
-
 .skill-tag {
-    display: inline-block;
-    background: var(--lavender);
-    color: var(--deep-blue);
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 0.82rem;
-    margin: 2px 3px;
-    font-family: 'JetBrains Mono', monospace;
+    display: inline-block; background: var(--lavender); color: var(--deep-blue);
+    padding: 2px 10px; border-radius: 12px; font-size: 0.82rem;
+    margin: 2px 3px; font-family: 'JetBrains Mono', monospace;
 }
-
 .match-reason { color: var(--green); font-size: 0.88rem; }
 .match-gap { color: #e65100; font-size: 0.88rem; }
-
 .privacy-strip {
-    background: var(--lavender);
-    border-radius: 6px;
-    padding: 0.5rem 0.8rem;
-    font-size: 0.82rem;
-    margin-bottom: 0.8rem;
-    border-left: 3px solid var(--purple);
+    background: var(--lavender); border-radius: 6px;
+    padding: 0.5rem 0.8rem; font-size: 0.82rem;
+    margin-bottom: 0.8rem; border-left: 3px solid var(--purple);
 }
-
 .disclaimer {
-    font-size: 0.78rem;
-    color: var(--slate);
-    border-top: 1px solid #ddd;
-    padding-top: 0.8rem;
-    margin-top: 1.5rem;
+    font-size: 0.78rem; color: var(--slate);
+    border-top: 1px solid #ddd; padding-top: 0.8rem; margin-top: 1.5rem;
 }
 </style>
 """, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+COUNTRY_MAP = {
+    "Any country": "",
+    "United Kingdom": "UK",
+    "United States": "US",
+    "Germany": "DE",
+    "Canada": "CA",
+    "France": "FR",
+    "Spain": "ES",
+    "Australia": "AU",
+    "Netherlands": "NL",
+    "Ireland": "IE",
+    "Sweden": "SE",
+    "Italy": "IT",
+    "Portugal": "PT",
+    "Switzerland": "CH",
+    "Austria": "AT",
+    "Belgium": "BE",
+    "India": "IN",
+    "Singapore": "SG",
+    "Brazil": "BR",
+}
+COUNTRY_NAMES = list(COUNTRY_MAP.keys())
+CODE_TO_NAME = {v: k for k, v in COUNTRY_MAP.items() if v}
 
 # ---------------------------------------------------------------------------
 # Session state
@@ -161,6 +146,7 @@ _DEFAULTS = {
     "scored_results": [],
     "persist_mode": False,
     "current_step": 0,
+    "_go_to_tab": None,
 }
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
@@ -175,26 +161,38 @@ if st.session_state.profile.is_empty and privacy_mgr.is_persisted():
         st.session_state.persist_mode = True
 
 # ---------------------------------------------------------------------------
-# Helper: step completion status
+# Auto-advance: inject JS to click a tab if requested
 # ---------------------------------------------------------------------------
-def _step_status() -> list[str]:
-    """Returns ['done', 'done', 'active', 'pending'] style list."""
+if st.session_state._go_to_tab is not None:
+    tab_idx = st.session_state._go_to_tab
+    st.session_state._go_to_tab = None
+    components.html(
+        f"""<script>
+        const tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
+        if (tabs.length > {tab_idx}) {{ tabs[{tab_idx}].click(); }}
+        </script>""",
+        height=0,
+    )
+
+# ---------------------------------------------------------------------------
+# Step progress
+# ---------------------------------------------------------------------------
+def _step_status():
     cv_done = not st.session_state.profile.is_empty
     prefs_done = bool(st.session_state.preferences.target_titles)
     search_done = bool(st.session_state.scored_results)
-    results_done = search_done
+    step = st.session_state.current_step
+    return [
+        "done" if cv_done else ("active" if step == 0 else "pending"),
+        "done" if prefs_done else ("active" if step == 1 else "pending"),
+        "done" if search_done else ("active" if step == 2 else "pending"),
+        "done" if search_done else ("active" if step == 3 else "pending"),
+    ]
 
-    statuses = []
-    statuses.append("done" if cv_done else "active" if st.session_state.current_step == 0 else "pending")
-    statuses.append("done" if prefs_done else "active" if st.session_state.current_step == 1 else "pending")
-    statuses.append("done" if search_done else "active" if st.session_state.current_step == 2 else "pending")
-    statuses.append("done" if results_done else "active" if st.session_state.current_step == 3 else "pending")
-    return statuses
-
-STEP_LABELS = ["1. Upload CV", "2. Preferences", "3. Search Jobs", "4. Results"]
+STEP_LABELS = ["1. Upload CV", "2. Preferences", "3. Search", "4. Results"]
 
 # ---------------------------------------------------------------------------
-# Header: compact hero + privacy strip
+# Header
 # ---------------------------------------------------------------------------
 col_hero, col_img = st.columns([4, 1])
 with col_hero:
@@ -204,10 +202,7 @@ with col_hero:
         unsafe_allow_html=True,
     )
 with col_img:
-    st.image(
-        "https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=200&q=80",
-        use_container_width=True,
-    )
+    st.image("https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=200&q=80", use_container_width=True)
 
 st.markdown(
     '<div class="privacy-strip">'
@@ -217,41 +212,34 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Step progress bar
 statuses = _step_status()
 step_html = '<div class="step-bar">'
-for i, (label, status) in enumerate(zip(STEP_LABELS, statuses)):
+for label, status in zip(STEP_LABELS, statuses):
     icon = "✅ " if status == "done" else ""
     step_html += f'<div class="step-item step-{status}">{icon}{label}</div>'
 step_html += "</div>"
 st.markdown(step_html, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Sidebar: Privacy settings (collapsed by default, less clutter)
+# Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("### 🔒 Privacy")
     mode_label = "💾 Saved locally" if st.session_state.persist_mode else "🧊 Ephemeral"
     st.caption(f"**Mode:** {mode_label}")
-
-    new_persist = st.toggle(
-        "Remember my profile on this device",
-        value=st.session_state.persist_mode,
-        help="OFF = cleared on close. ON = saved to local disk only.",
-    )
+    new_persist = st.toggle("Remember my profile on this device", value=st.session_state.persist_mode,
+                            help="OFF = cleared on close. ON = saved to local disk only.")
     if new_persist != st.session_state.persist_mode:
         st.session_state.persist_mode = new_persist
         if new_persist and not st.session_state.profile.is_empty:
             privacy_mgr.save_profile(st.session_state.profile, st.session_state.preferences)
         st.rerun()
-
     if st.button("🗑️ Delete all local data"):
         privacy_mgr.delete_all()
         for k, v in _DEFAULTS.items():
             st.session_state[k] = v
         st.success("Done! All cleared.")
         st.rerun()
-
     with st.expander("Import / Export"):
         export_data = privacy_mgr.export_profile()
         if export_data:
@@ -267,7 +255,7 @@ with st.sidebar:
                     st.rerun()
 
 # ---------------------------------------------------------------------------
-# Tabs
+# Tabs (all freely navigable -- no locking)
 # ---------------------------------------------------------------------------
 tab_cv, tab_prefs, tab_search, tab_results = st.tabs(
     ["📄 Upload CV", "⚙️ Preferences", "🔍 Search Jobs", "📊 Results"]
@@ -276,9 +264,7 @@ tab_cv, tab_prefs, tab_search, tab_results = st.tabs(
 # ===== TAB 1: CV Upload =====
 with tab_cv:
     uploaded_file = st.file_uploader(
-        "Upload your CV (PDF, DOCX, or TXT)",
-        type=["pdf", "docx", "txt"],
-        key="cv_upload",
+        "Upload your CV (PDF, DOCX, or TXT)", type=["pdf", "docx", "txt"], key="cv_upload",
     )
 
     if uploaded_file is not None:
@@ -292,22 +278,45 @@ with tab_cv:
                 if st.session_state.persist_mode:
                     privacy_mgr.save_profile(profile, st.session_state.preferences)
                 st.session_state.current_step = max(st.session_state.current_step, 1)
-                st.success("CV parsed! Move to the **Preferences** tab next.")
+                # Auto-advance to Preferences tab
+                st.session_state._go_to_tab = 1
+                st.rerun()
             except Exception as e:
                 st.error(f"Failed to parse: {e}")
 
     profile = st.session_state.profile
     if not profile.is_empty:
+        st.success("CV parsed! Review your skills below, then head to **Preferences**.")
+
+        # Editable skills: user can remove irrelevant ones or add missing ones
+        current_skills = list(profile.skills)
+        edited_skills = st.multiselect(
+            "Your skills (remove irrelevant ones, type to add new ones)",
+            options=current_skills,
+            default=current_skills,
+            help="Remove skills that aren't relevant. Type a new skill name and press Enter to add it.",
+            key="skill_editor",
+        )
+        # If user changed the skills, update the profile
+        if set(edited_skills) != set(current_skills):
+            st.session_state.profile = Profile(
+                raw_text=profile.raw_text,
+                skills=edited_skills,
+                years_experience=profile.years_experience,
+                role_hints=profile.role_hints,
+                summary=profile.summary,
+            )
+            if st.session_state.persist_mode:
+                privacy_mgr.save_profile(st.session_state.profile, st.session_state.preferences)
+
         col1, col2 = st.columns([3, 1])
         with col1:
-            if profile.skills:
-                skills_html = " ".join(f'<span class="skill-tag">{s}</span>' for s in profile.skills[:25])
-                st.markdown(f"**Skills detected:** {skills_html}", unsafe_allow_html=True)
+            if profile.role_hints:
+                st.caption("**Role hints:** " + ", ".join(profile.role_hints[:5]))
         with col2:
             if profile.years_experience:
                 st.metric("Experience", f"~{profile.years_experience:.0f} yrs")
-        if profile.role_hints:
-            st.caption("**Role hints:** " + ", ".join(profile.role_hints[:5]))
+
         with st.expander("Preview extracted text"):
             st.text(profile.raw_text[:2000])
     else:
@@ -337,14 +346,11 @@ with tab_prefs:
         )
 
     with col_side:
-        COUNTRIES = [
-            "", "UK", "US", "DE", "CA", "FR", "ES", "AU", "NL", "IE",
-            "SE", "IT", "PT", "CH", "AT", "BE", "IN", "SG", "BR", "Other",
-        ]
-        country = st.selectbox(
+        current_country_name = CODE_TO_NAME.get(prefs.country, "Any country")
+        country_name = st.selectbox(
             "Country",
-            COUNTRIES,
-            index=COUNTRIES.index(prefs.country) if prefs.country in COUNTRIES else 0,
+            COUNTRY_NAMES,
+            index=COUNTRY_NAMES.index(current_country_name) if current_country_name in COUNTRY_NAMES else 0,
             help="Helps disambiguate cities (e.g. London UK vs London Canada)",
         )
         locations = st.text_input(
@@ -364,7 +370,8 @@ with tab_prefs:
             "Work arrangement",
             REMOTE_OPTIONS,
             default=[d for d in remote_defaults if d in REMOTE_OPTIONS],
-            help="Select all that apply",
+            placeholder="Any (leave empty)",
+            help="Leave empty to include all. Select specific ones to filter.",
         )
     with col_b:
         SENIORITY_OPTIONS = ["Junior", "Mid", "Senior", "Lead", "Executive"]
@@ -373,14 +380,13 @@ with tab_prefs:
             "Seniority level",
             SENIORITY_OPTIONS,
             default=[s for s in sen_defaults if s in SENIORITY_OPTIONS],
-            help="Select all that apply",
+            placeholder="Any (leave empty)",
+            help="Leave empty to include all. Select specific ones to filter.",
         )
     with col_c:
         min_salary = st.number_input(
-            "Min salary (annual)",
-            min_value=0,
-            value=int(prefs.min_salary) if prefs.min_salary else 0,
-            step=5000,
+            "Min salary (annual)", min_value=0,
+            value=int(prefs.min_salary) if prefs.min_salary else 0, step=5000,
         )
         industries = st.text_input(
             "Industries (optional)",
@@ -388,7 +394,7 @@ with tab_prefs:
             placeholder="e.g. fintech, healthtech",
         )
 
-    if st.button("💾 Save preferences", type="primary"):
+    if st.button("💾 Save preferences & continue", type="primary"):
         remote_map = {"Remote": "remote", "Hybrid": "hybrid", "On-site": "onsite"}
         seniority_map = {"Junior": "junior", "Mid": "mid", "Senior": "senior", "Lead": "lead", "Executive": "executive"}
         new_prefs = Preferences(
@@ -396,7 +402,7 @@ with tab_prefs:
             required_skills=[s.strip().lower() for s in required_skills.split(",") if s.strip()],
             nice_to_have_skills=[s.strip().lower() for s in nice_skills.split(",") if s.strip()],
             locations=[loc.strip() for loc in locations.split(",") if loc.strip()],
-            country=country if country != "Other" else "",
+            country=COUNTRY_MAP.get(country_name, ""),
             remote_types=[remote_map[r] for r in remote_types],
             seniority_levels=[seniority_map[s] for s in seniority_levels],
             min_salary=float(min_salary) if min_salary > 0 else None,
@@ -406,24 +412,18 @@ with tab_prefs:
         if st.session_state.persist_mode:
             privacy_mgr.save_profile(st.session_state.profile, new_prefs)
         st.session_state.current_step = max(st.session_state.current_step, 2)
-        st.success("Saved! Head to the **Search Jobs** tab.")
+        st.session_state._go_to_tab = 2
+        st.rerun()
 
 # ===== TAB 3: Search Jobs =====
 with tab_search:
     st.caption("Fetches from public job APIs only. No personal data is sent.")
 
-    # Source selection with descriptions
-    source_options = {
-        "Remotive": "Remote-first jobs worldwide",
-        "Arbeitnow": "European & remote jobs",
-        "Greenhouse": "Tech company career boards",
-    }
-
     selected_sources = st.multiselect(
         "Job sources to search",
-        list(source_options.keys()),
+        ["Remotive", "Arbeitnow", "Greenhouse"],
         default=["Remotive", "Arbeitnow"],
-        help="Greenhouse fetches from specific company boards configured in the data folder.",
+        help="Remotive: remote-first worldwide. Arbeitnow: European & remote. Greenhouse: specific tech company boards.",
     )
 
     fetch_btn = st.button("🔍 Fetch & Match Jobs", type="primary", use_container_width=True)
@@ -447,31 +447,32 @@ with tab_search:
 
         if jobs and not st.session_state.profile.is_empty:
             with st.spinner("Ranking matches..."):
-                prefs = st.session_state.preferences
-                profile = st.session_state.profile
-                filtered = apply_hard_filters(jobs, prefs)
-                scored = score_jobs(filtered, profile, prefs)
+                prefs_obj = st.session_state.preferences
+                profile_obj = st.session_state.profile
+                filtered = apply_hard_filters(jobs, prefs_obj)
+                scored = score_jobs(filtered, profile_obj, prefs_obj)
                 results = []
                 for job, score, sub_scores in scored:
-                    explanation = explain_match(job, profile, prefs, sub_scores)
+                    explanation = explain_match(job, profile_obj, prefs_obj, sub_scores)
                     results.append((job, score, sub_scores, explanation))
                 st.session_state.scored_results = results
                 st.session_state.current_step = 3
-                st.success(f"**{len(results)} matches** found! Check the **Results** tab.")
+                st.session_state._go_to_tab = 3
+                st.rerun()
         elif jobs:
             results = [(j, 0.0, {}, {"reasons": ["Upload CV for personalised scoring"], "gaps": []}) for j in jobs]
             st.session_state.scored_results = results
             st.session_state.current_step = 3
-            st.info(f"Found {len(results)} jobs. Upload a CV for ranked results!")
+            st.session_state._go_to_tab = 3
+            st.rerun()
 
 # ===== TAB 4: Results =====
 with tab_results:
     results = st.session_state.scored_results
 
     if not results:
-        st.info("No results yet. Use the **Search Jobs** tab first.")
+        st.info("No results yet. Use the **Search Jobs** tab to fetch listings.")
     else:
-        # Compact filter bar
         f1, f2, f3, f4 = st.columns([2, 2, 2, 1])
         with f1:
             all_sources = sorted({r[0].source.split(":")[0] for r in results})
@@ -481,20 +482,17 @@ with tab_results:
         with f3:
             sort_option = st.selectbox("Sort", ["Best match", "Lowest match", "Newest"])
         with f4:
-            # CSV export button
-            if results:
-                csv_buffer = io.StringIO()
-                writer = csv.writer(csv_buffer)
-                writer.writerow(["Score", "Title", "Company", "Location", "Remote", "Source", "URL", "Reasons"])
-                for job, score, _, explanation in results:
-                    writer.writerow([
-                        f"{score:.2f}", job.title, job.company, job.location,
-                        job.remote_type, job.source, job.url,
-                        "; ".join(explanation.get("reasons", [])),
-                    ])
-                st.download_button("📥 CSV", csv_buffer.getvalue(), "jobs.csv", "text/csv", use_container_width=True)
+            csv_buffer = io.StringIO()
+            writer = csv.writer(csv_buffer)
+            writer.writerow(["Score", "Title", "Company", "Location", "Remote", "Source", "URL", "Reasons"])
+            for job, score, _, explanation in results:
+                writer.writerow([
+                    f"{score:.2f}", job.title, job.company, job.location,
+                    job.remote_type, job.source, job.url,
+                    "; ".join(explanation.get("reasons", [])),
+                ])
+            st.download_button("📥 CSV", csv_buffer.getvalue(), "jobs.csv", "text/csv", use_container_width=True)
 
-        # Apply result filters
         filtered_results = results
         if source_filter:
             filtered_results = [r for r in filtered_results if r[0].source.split(":")[0] in source_filter]
@@ -502,19 +500,16 @@ with tab_results:
             rt_map = {"Remote": "remote", "Hybrid": "hybrid", "On-site": "onsite"}
             wanted = {rt_map[r] for r in remote_filter if r in rt_map}
             filtered_results = [r for r in filtered_results if r[0].remote_type in wanted]
-
         if sort_option == "Lowest match":
             filtered_results.sort(key=lambda x: x[1])
         elif sort_option == "Newest":
             from datetime import datetime, timezone
             filtered_results.sort(
-                key=lambda x: x[0].published_at or datetime.min.replace(tzinfo=timezone.utc),
-                reverse=True,
+                key=lambda x: x[0].published_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True,
             )
 
         st.caption(f"Showing {len(filtered_results)} of {len(results)}")
 
-        # Job cards
         for job, score, sub_scores, explanation in filtered_results[:50]:
             score_pct = int(score * 100)
             reasons = explanation.get("reasons", [])
@@ -538,16 +533,11 @@ with tab_results:
             """, unsafe_allow_html=True)
 
             if job.tags:
-                st.markdown(
-                    " ".join(f'<span class="skill-tag">{t}</span>' for t in job.tags[:8]),
-                    unsafe_allow_html=True,
-                )
-
+                st.markdown(" ".join(f'<span class="skill-tag">{t}</span>' for t in job.tags[:8]), unsafe_allow_html=True)
             for r in reasons[:3]:
                 st.markdown(f'<div class="match-reason">✅ {r}</div>', unsafe_allow_html=True)
             for g in gaps[:2]:
                 st.markdown(f'<div class="match-gap">⚠️ {g}</div>', unsafe_allow_html=True)
-
             st.markdown("</div>", unsafe_allow_html=True)
 
             c1, c2 = st.columns([1, 5])
