@@ -1,11 +1,12 @@
 import csv
 import io
+import os
 
 import streamlit as st
 import streamlit.components.v1 as components
 
 from src.cv.parser import parse_cv
-from src.cv.entities import build_profile, extract_skills
+from src.cv.entities import build_profile
 from src.matching.dedup import deduplicate
 from src.matching.explainer import explain_match
 from src.matching.filters import apply_hard_filters
@@ -13,6 +14,8 @@ from src.matching.scorer import score_jobs
 from src.models.preferences import Preferences
 from src.models.profile import Profile
 from src.sources.normalizer import fetch_all_jobs, get_all_connectors
+from src.sources.reed import ReedConnector
+from src.sources.adzuna import AdzunaConnector
 from src.storage.privacy import PrivacyManager
 from src.utils.http_client import register_personal_fragments
 
@@ -21,7 +24,6 @@ from src.utils.http_client import register_personal_fragments
 # ---------------------------------------------------------------------------
 st.set_page_config(
     page_title="Job Seeker Cheater",
-    page_icon="🏖️",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -54,14 +56,15 @@ h1, h2, h3 { font-family: 'Fredoka One', cursive; color: var(--deep-blue); }
 
 .hero-title {
     font-family: 'Fredoka One', cursive;
-    font-size: 2.5rem; color: var(--deep-blue);
-    margin-bottom: 0; line-height: 1.2;
+    font-size: 3.5rem; color: var(--deep-blue);
+    margin-bottom: 0; line-height: 1.1;
+    letter-spacing: -1px;
 }
 .hero-cheater { color: var(--bordeaux); }
 .hero-tagline {
     font-family: 'Nunito', sans-serif;
-    font-size: 1.15rem; color: var(--slate);
-    margin-top: 0.2rem; margin-bottom: 0.5rem;
+    font-size: 1.3rem; color: var(--slate);
+    margin-top: 0.3rem; margin-bottom: 0.8rem;
 }
 
 .step-bar { display: flex; gap: 0; margin-bottom: 1.2rem; }
@@ -83,7 +86,6 @@ h1, h2, h3 { font-family: 'Fredoka One', cursive; color: var(--deep-blue); }
 .job-card h3 { margin: 0 0 0.3rem 0; font-size: 1.1rem; }
 .job-card .company { color: var(--purple); font-weight: 700; }
 .job-card .meta { color: var(--slate); font-size: 0.85rem; }
-
 .score-badge {
     display: inline-block; background: var(--gold); color: var(--deep-blue);
     font-weight: 700; border-radius: 50%;
@@ -105,6 +107,11 @@ h1, h2, h3 { font-family: 'Fredoka One', cursive; color: var(--deep-blue); }
 .disclaimer {
     font-size: 0.78rem; color: var(--slate);
     border-top: 1px solid #ddd; padding-top: 0.8rem; margin-top: 1.5rem;
+}
+.api-hint {
+    background: #fff8e1; border-left: 3px solid var(--gold);
+    border-radius: 6px; padding: 0.6rem 0.8rem; font-size: 0.84rem;
+    margin-top: 0.6rem;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -132,9 +139,15 @@ COUNTRY_MAP = {
     "India": "IN",
     "Singapore": "SG",
     "Brazil": "BR",
+    "New Zealand": "NZ",
+    "Poland": "PL",
+    "South Africa": "ZA",
 }
 COUNTRY_NAMES = list(COUNTRY_MAP.keys())
 CODE_TO_NAME = {v: k for k, v in COUNTRY_MAP.items() if v}
+
+# Countries available for "Also search remote in" (excludes "Any country")
+REMOTE_COUNTRY_OPTIONS = [n for n in COUNTRY_NAMES if n != "Any country"]
 
 # ---------------------------------------------------------------------------
 # Session state
@@ -192,21 +205,17 @@ def _step_status():
 STEP_LABELS = ["1. Upload CV", "2. Preferences", "3. Search", "4. Results"]
 
 # ---------------------------------------------------------------------------
-# Header
+# Header -- big, clean, no image, no emoji
 # ---------------------------------------------------------------------------
-col_hero, col_img = st.columns([4, 1])
-with col_hero:
-    st.markdown(
-        '<p class="hero-title">Job Seeker <span class="hero-cheater">Cheater</span> 🏖️</p>'
-        '<p class="hero-tagline">Your laptop works. You relax.</p>',
-        unsafe_allow_html=True,
-    )
-with col_img:
-    st.image("https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=200&q=80", use_container_width=True)
+st.markdown(
+    '<p class="hero-title">Job Seeker <span class="hero-cheater">Cheater</span></p>'
+    '<p class="hero-tagline">It searches. You chill.</p>',
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     '<div class="privacy-strip">'
-    "🔒 Your CV is processed <b>locally on your machine</b> and never uploaded anywhere. "
+    "Your CV is processed <b>locally on your machine</b> and never uploaded anywhere. "
     "No cookies. No trackers. Pinky promise."
     "</div>",
     unsafe_allow_html=True,
@@ -224,8 +233,8 @@ st.markdown(step_html, unsafe_allow_html=True)
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.markdown("### 🔒 Privacy")
-    mode_label = "💾 Saved locally" if st.session_state.persist_mode else "🧊 Ephemeral"
+    st.markdown("### Privacy")
+    mode_label = "Saved locally" if st.session_state.persist_mode else "Ephemeral"
     st.caption(f"**Mode:** {mode_label}")
     new_persist = st.toggle("Remember my profile on this device", value=st.session_state.persist_mode,
                             help="OFF = cleared on close. ON = saved to local disk only.")
@@ -234,7 +243,7 @@ with st.sidebar:
         if new_persist and not st.session_state.profile.is_empty:
             privacy_mgr.save_profile(st.session_state.profile, st.session_state.preferences)
         st.rerun()
-    if st.button("🗑️ Delete all local data"):
+    if st.button("Delete all local data"):
         privacy_mgr.delete_all()
         for k, v in _DEFAULTS.items():
             st.session_state[k] = v
@@ -255,10 +264,10 @@ with st.sidebar:
                     st.rerun()
 
 # ---------------------------------------------------------------------------
-# Tabs (all freely navigable -- no locking)
+# Tabs (all freely navigable)
 # ---------------------------------------------------------------------------
 tab_cv, tab_prefs, tab_search, tab_results = st.tabs(
-    ["📄 Upload CV", "⚙️ Preferences", "🔍 Search Jobs", "📊 Results"]
+    ["Upload CV", "Preferences", "Search Jobs", "Results"]
 )
 
 # ===== TAB 1: CV Upload =====
@@ -278,7 +287,6 @@ with tab_cv:
                 if st.session_state.persist_mode:
                     privacy_mgr.save_profile(profile, st.session_state.preferences)
                 st.session_state.current_step = max(st.session_state.current_step, 1)
-                # Auto-advance to Preferences tab
                 st.session_state._go_to_tab = 1
                 st.rerun()
             except Exception as e:
@@ -288,7 +296,6 @@ with tab_cv:
     if not profile.is_empty:
         st.success("CV parsed! Review your skills below, then head to **Preferences**.")
 
-        # Editable skills: user can remove irrelevant ones or add missing ones
         current_skills = list(profile.skills)
         edited_skills = st.multiselect(
             "Your skills (remove irrelevant ones, type to add new ones)",
@@ -297,7 +304,6 @@ with tab_cv:
             help="Remove skills that aren't relevant. Type a new skill name and press Enter to add it.",
             key="skill_editor",
         )
-        # If user changed the skills, update the profile
         if set(edited_skills) != set(current_skills):
             st.session_state.profile = Profile(
                 raw_text=profile.raw_text,
@@ -351,7 +357,7 @@ with tab_prefs:
             "Country",
             COUNTRY_NAMES,
             index=COUNTRY_NAMES.index(current_country_name) if current_country_name in COUNTRY_NAMES else 0,
-            help="Helps disambiguate cities (e.g. London UK vs London Canada)",
+            help="Your primary country. Disambiguates cities (e.g. London UK vs London CA).",
         )
         locations = st.text_input(
             "City / region (comma-separated)",
@@ -371,7 +377,7 @@ with tab_prefs:
             REMOTE_OPTIONS,
             default=[d for d in remote_defaults if d in REMOTE_OPTIONS],
             placeholder="Any (leave empty)",
-            help="Leave empty to include all. Select specific ones to filter.",
+            help="Leave empty = all types. Select specific ones to filter.",
         )
     with col_b:
         SENIORITY_OPTIONS = ["Junior", "Mid", "Senior", "Lead", "Executive"]
@@ -381,7 +387,7 @@ with tab_prefs:
             SENIORITY_OPTIONS,
             default=[s for s in sen_defaults if s in SENIORITY_OPTIONS],
             placeholder="Any (leave empty)",
-            help="Leave empty to include all. Select specific ones to filter.",
+            help="Leave empty = all levels. Select specific ones to filter.",
         )
     with col_c:
         min_salary = st.number_input(
@@ -394,7 +400,23 @@ with tab_prefs:
             placeholder="e.g. fintech, healthtech",
         )
 
-    if st.button("💾 Save preferences & continue", type="primary"):
+    # Multi-region remote: "Also search for remote jobs in..."
+    st.markdown("---")
+    st.markdown("**Also look for remote jobs in other countries?**")
+    st.caption(
+        "If you can legally work remotely for employers in other countries, add them here. "
+        "Only remote positions will be included from these regions."
+    )
+    also_remote_defaults = [CODE_TO_NAME.get(c, c) for c in prefs.also_remote_in if CODE_TO_NAME.get(c, c) in REMOTE_COUNTRY_OPTIONS]
+    also_remote_in = st.multiselect(
+        "Additional remote countries",
+        REMOTE_COUNTRY_OPTIONS,
+        default=also_remote_defaults,
+        placeholder="e.g. Germany, France, Netherlands...",
+        help="Jobs from these countries will only be included if they are remote.",
+    )
+
+    if st.button("Save preferences & continue", type="primary"):
         remote_map = {"Remote": "remote", "Hybrid": "hybrid", "On-site": "onsite"}
         seniority_map = {"Junior": "junior", "Mid": "mid", "Senior": "senior", "Lead": "lead", "Executive": "executive"}
         new_prefs = Preferences(
@@ -407,6 +429,7 @@ with tab_prefs:
             seniority_levels=[seniority_map[s] for s in seniority_levels],
             min_salary=float(min_salary) if min_salary > 0 else None,
             industries=[i.strip().lower() for i in industries.split(",") if i.strip()],
+            also_remote_in=[COUNTRY_MAP[n] for n in also_remote_in if n in COUNTRY_MAP],
         )
         st.session_state.preferences = new_prefs
         if st.session_state.persist_mode:
@@ -419,22 +442,86 @@ with tab_prefs:
 with tab_search:
     st.caption("Fetches from public job APIs only. No personal data is sent.")
 
+    reed_available = ReedConnector.is_available()
+    adzuna_available = AdzunaConnector.is_available()
+
+    # Build source options dynamically based on available API keys
+    source_options = {
+        "Remotive": ("Remote-first jobs worldwide", True),
+        "Arbeitnow": ("European & remote jobs", True),
+        "Greenhouse": ("Tech company career boards", True),
+    }
+    if reed_available:
+        source_options["Reed"] = ("UK's largest job board", True)
+    if adzuna_available:
+        source_options["Adzuna"] = ("UK, US, EU, AU and more", True)
+
+    default_sources = ["Remotive", "Arbeitnow"]
+    if reed_available:
+        default_sources.append("Reed")
+    if adzuna_available:
+        default_sources.append("Adzuna")
+
     selected_sources = st.multiselect(
         "Job sources to search",
-        ["Remotive", "Arbeitnow", "Greenhouse"],
-        default=["Remotive", "Arbeitnow"],
-        help="Remotive: remote-first worldwide. Arbeitnow: European & remote. Greenhouse: specific tech company boards.",
+        list(source_options.keys()),
+        default=default_sources,
+        help="Select which boards to search. More sources = more results but slower.",
     )
 
-    fetch_btn = st.button("🔍 Fetch & Match Jobs", type="primary", use_container_width=True)
+    # Helpful hint if Reed/Adzuna not configured
+    if not reed_available or not adzuna_available:
+        missing = []
+        if not reed_available:
+            missing.append("**Reed.co.uk** (UK's #1 board) -- get a free key at [reed.co.uk/developers](https://www.reed.co.uk/developers/Jobseeker)")
+        if not adzuna_available:
+            missing.append("**Adzuna** (UK/US/EU/AU) -- get a free key at [developer.adzuna.com](https://developer.adzuna.com/signup)")
+        hint_text = "Want more sources? Add free API keys to unlock:<br>" + "<br>".join(missing)
+        hint_text += "<br><br>Set them as environment variables before launching, or add to a <code>.env</code> file."
+        st.markdown(f'<div class="api-hint">{hint_text}</div>', unsafe_allow_html=True)
+
+    st.markdown("")
+    st.caption(
+        "**About Indeed & LinkedIn:** These platforms don't offer free public APIs. "
+        "We respect their terms of service, so we can't scrape them. "
+        "Reed and Adzuna are excellent free alternatives that cover UK and international markets."
+    )
+
+    fetch_btn = st.button("Fetch & Match Jobs", type="primary", use_container_width=True)
 
     if fetch_btn:
         if st.session_state.profile.is_empty:
             st.warning("Upload your CV first for personalised ranking.")
 
-        source_map = {"Remotive": "remotive", "Arbeitnow": "arbeitnow", "Greenhouse": "greenhouse"}
-        all_connectors = get_all_connectors()
-        connectors = [c for c in all_connectors if c.name in [source_map[s] for s in selected_sources]]
+        source_map = {
+            "Remotive": "remotive", "Arbeitnow": "arbeitnow",
+            "Greenhouse": "greenhouse", "Reed": "reed", "Adzuna": "adzuna",
+        }
+
+        prefs_obj = st.session_state.preferences
+
+        # Build connectors, passing search context to Reed/Adzuna
+        connectors = []
+        all_available = get_all_connectors()
+        for s in selected_sources:
+            s_name = source_map.get(s, "")
+            if s_name in ("reed", "adzuna"):
+                kw = " ".join(prefs_obj.target_titles[:3]) if prefs_obj.target_titles else ""
+                loc = prefs_obj.locations[0] if prefs_obj.locations else ""
+                country = prefs_obj.country or "UK"
+                if s_name == "reed":
+                    connectors.append(ReedConnector(keywords=kw, location=loc))
+                else:
+                    connectors.append(AdzunaConnector(keywords=kw, location=loc, country=country))
+                    # Also fetch from additional remote countries
+                    for extra_country in prefs_obj.also_remote_in:
+                        if extra_country != country:
+                            connectors.append(AdzunaConnector(keywords=kw, country=extra_country))
+            else:
+                for c in all_available:
+                    if c.name == s_name:
+                        connectors.append(c)
+                        break
 
         with st.spinner("Fetching jobs from public APIs..."):
             try:
@@ -447,7 +534,6 @@ with tab_search:
 
         if jobs and not st.session_state.profile.is_empty:
             with st.spinner("Ranking matches..."):
-                prefs_obj = st.session_state.preferences
                 profile_obj = st.session_state.profile
                 filtered = apply_hard_filters(jobs, prefs_obj)
                 scored = score_jobs(filtered, profile_obj, prefs_obj)
@@ -491,7 +577,7 @@ with tab_results:
                     job.remote_type, job.source, job.url,
                     "; ".join(explanation.get("reasons", [])),
                 ])
-            st.download_button("📥 CSV", csv_buffer.getvalue(), "jobs.csv", "text/csv", use_container_width=True)
+            st.download_button("CSV", csv_buffer.getvalue(), "jobs.csv", "text/csv", use_container_width=True)
 
         filtered_results = results
         if source_filter:
@@ -522,10 +608,10 @@ with tab_results:
                         <h3>{job.title}</h3>
                         <span class="company">{job.company}</span>
                         <div class="meta">
-                            📍 {job.location or "Not specified"}
-                            {"&nbsp; 🏠 " + job.remote_type.title() if job.remote_type else ""}
-                            {"&nbsp; 💰 " + job.display_salary if job.display_salary else ""}
-                            &nbsp; 📡 {job.source}
+                            {job.location or "Not specified"}
+                            {"&nbsp; | &nbsp;" + job.remote_type.title() if job.remote_type else ""}
+                            {"&nbsp; | &nbsp;" + job.display_salary if job.display_salary else ""}
+                            &nbsp; | &nbsp; {job.source}
                         </div>
                     </div>
                     <div class="score-badge">{score_pct}%</div>
@@ -543,7 +629,7 @@ with tab_results:
             c1, c2 = st.columns([1, 5])
             with c1:
                 if job.url:
-                    st.link_button("🚀 Apply", job.url, use_container_width=True)
+                    st.link_button("Apply", job.url, use_container_width=True)
             with c2:
                 with st.expander("Description"):
                     st.text(job.description[:1500] if job.description else "No description.")
@@ -553,9 +639,9 @@ with tab_results:
 # ---------------------------------------------------------------------------
 st.markdown("""
 <div class="disclaimer">
-<b>Disclaimer:</b> Job Seeker Cheater suggests jobs only -- it doesn't apply on your behalf.
+<b>Disclaimer:</b> Job Seeker Cheater suggests jobs -- it doesn't apply on your behalf.
 You're responsible for verifying listings and submitting applications.
-All data from public APIs (Remotive, Arbeitnow, Greenhouse). Your CV stays on your machine.
-No cookies, no analytics. <b>Not legal or employment advice.</b>
+Data from public APIs. Your CV stays on your machine. No cookies, no analytics.
+<b>Not legal or employment advice.</b>
 </div>
 """, unsafe_allow_html=True)

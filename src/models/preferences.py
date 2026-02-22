@@ -15,6 +15,7 @@ class Preferences:
     min_salary: float | None = None
     salary_currency: str = "USD"
     industries: list[str] = field(default_factory=list)
+    also_remote_in: list[str] = field(default_factory=list)  # extra countries for remote-only
 
     # Legacy single-value compat
     @property
@@ -37,6 +38,7 @@ class Preferences:
             "min_salary": self.min_salary,
             "salary_currency": self.salary_currency,
             "industries": self.industries,
+            "also_remote_in": self.also_remote_in,
         }
 
     @classmethod

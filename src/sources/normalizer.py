@@ -5,14 +5,21 @@ from src.sources.base import BaseConnector
 from src.sources.remotive import RemotiveConnector
 from src.sources.arbeitnow import ArbeitnowConnector
 from src.sources.greenhouse import GreenhouseConnector
+from src.sources.reed import ReedConnector
+from src.sources.adzuna import AdzunaConnector
 
 
 def get_all_connectors() -> list[BaseConnector]:
-    return [
+    connectors: list[BaseConnector] = [
         RemotiveConnector(),
         ArbeitnowConnector(),
         GreenhouseConnector(),
     ]
+    if ReedConnector.is_available():
+        connectors.append(ReedConnector())
+    if AdzunaConnector.is_available():
+        connectors.append(AdzunaConnector())
+    return connectors
 
 
 def fetch_all_jobs(connectors: list[BaseConnector] | None = None) -> list[Job]:

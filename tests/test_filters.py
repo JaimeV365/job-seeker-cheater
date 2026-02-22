@@ -85,6 +85,28 @@ def test_filter_salary():
     assert "2" not in ids
 
 
+def test_also_remote_in_bypasses_location_filter():
+    """Jobs from extra-remote countries pass even if they fail the primary location filter."""
+    jobs = [
+        _make_job(id="1", location="London, UK", remote_type="onsite"),
+        _make_job(id="2", location="Berlin, Germany", remote_type="remote"),
+        _make_job(id="3", location="Paris, France", remote_type="remote"),
+        _make_job(id="4", location="Berlin, Germany", remote_type="onsite"),
+    ]
+    prefs = Preferences(
+        locations=["London"],
+        country="UK",
+        remote_types=["onsite"],
+        also_remote_in=["DE"],
+    )
+    result = apply_hard_filters(jobs, prefs)
+    ids = {j.id for j in result}
+    assert "1" in ids    # primary location + onsite
+    assert "2" in ids    # extra-remote country (Germany, remote) -- bypass
+    assert "3" not in ids  # France not in also_remote_in
+    assert "4" not in ids  # Germany but onsite, not remote
+
+
 def test_no_filters():
     jobs = [_make_job(id="1"), _make_job(id="2")]
     prefs = Preferences()

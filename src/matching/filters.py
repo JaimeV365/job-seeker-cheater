@@ -5,21 +5,38 @@ from src.models.preferences import Preferences
 
 
 def apply_hard_filters(jobs: list[Job], prefs: Preferences) -> list[Job]:
-    filtered = jobs
+    filtered = []
+    for j in jobs:
+        # "Also remote in" bypass: if the job is remote and located in one of
+        # the additional remote countries, include it regardless of primary filters.
+        if prefs.also_remote_in and _is_remote_in_extra_country(j, prefs.also_remote_in):
+            filtered.append(j)
+            continue
 
-    if prefs.remote_types:
-        filtered = [j for j in filtered if _matches_remote(j, prefs.remote_types)]
-
-    if prefs.locations:
-        filtered = [j for j in filtered if _matches_location(j, prefs.locations, prefs.country)]
-
-    if prefs.min_salary is not None:
-        filtered = [j for j in filtered if _meets_salary(j, prefs.min_salary)]
-
-    if prefs.seniority_levels:
-        filtered = [j for j in filtered if _matches_seniority(j, prefs.seniority_levels)]
+        if prefs.remote_types and not _matches_remote(j, prefs.remote_types):
+            continue
+        if prefs.locations and not _matches_location(j, prefs.locations, prefs.country):
+            continue
+        if prefs.min_salary is not None and not _meets_salary(j, prefs.min_salary):
+            continue
+        if prefs.seniority_levels and not _matches_seniority(j, prefs.seniority_levels):
+            continue
+        filtered.append(j)
 
     return filtered
+
+
+def _is_remote_in_extra_country(job: Job, extra_countries: list[str]) -> bool:
+    """Return True if the job is remote and its location matches one of the extra countries."""
+    job_remote = job.remote_type.lower()
+    job_loc = job.location.lower()
+    if job_remote != "remote" and "remote" not in job_loc:
+        return False
+    for country in extra_countries:
+        aliases = _country_aliases(country.lower())
+        if any(alias in job_loc for alias in aliases):
+            return True
+    return False
 
 
 def _matches_remote(job: Job, wanted: list[str]) -> bool:
