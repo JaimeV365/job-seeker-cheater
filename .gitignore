@@ -31,3 +31,4 @@ htmlcov/
 Initial promt.txt
 .vscode/
 OFFLINE*/
+data/api_keys.json

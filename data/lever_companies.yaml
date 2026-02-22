@@ -1,0 +1,9 @@
+# Lever company slugs to search
+# Find the slug from the company's career page URL: jobs.lever.co/{slug}
+# Add companies you're interested in below.
+companies:
+  - netflix
+  - spotify
+  - cloudflare
+  - figma
+  - notion

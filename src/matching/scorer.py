@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-
 from src.models.job import Job
 from src.models.profile import Profile
 from src.models.preferences import Preferences
@@ -52,6 +49,9 @@ def score_jobs(
 def _compute_text_similarities(cv_text: str, job_texts: list[str]) -> list[float]:
     if not cv_text.strip() or not job_texts:
         return [0.0] * len(job_texts)
+
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
 
     corpus = [cv_text] + job_texts
     try:

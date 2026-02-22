@@ -27,14 +27,23 @@ def parse_txt(file_bytes: bytes) -> str:
     return collapse_whitespace(text)
 
 
+def parse_html(file_bytes: bytes) -> str:
+    from src.utils.text import clean_html
+
+    raw = file_bytes.decode("utf-8", errors="replace")
+    return collapse_whitespace(clean_html(raw))
+
+
 def parse_cv(filename: str, file_bytes: bytes) -> str:
     ext = Path(filename).suffix.lower()
     parsers = {
         ".pdf": parse_pdf,
         ".docx": parse_docx,
         ".txt": parse_txt,
+        ".html": parse_html,
+        ".htm": parse_html,
     }
     parser = parsers.get(ext)
     if parser is None:
-        raise ValueError(f"Unsupported file type: {ext}. Use PDF, DOCX, or TXT.")
+        raise ValueError(f"Unsupported file type: {ext}. Use PDF, DOCX, TXT, or HTML.")
     return parser(file_bytes)

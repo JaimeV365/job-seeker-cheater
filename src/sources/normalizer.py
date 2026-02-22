@@ -5,6 +5,7 @@ from src.sources.base import BaseConnector
 from src.sources.remotive import RemotiveConnector
 from src.sources.arbeitnow import ArbeitnowConnector
 from src.sources.greenhouse import GreenhouseConnector
+from src.sources.lever import LeverConnector
 from src.sources.reed import ReedConnector
 from src.sources.adzuna import AdzunaConnector
 
@@ -14,6 +15,7 @@ def get_all_connectors() -> list[BaseConnector]:
         RemotiveConnector(),
         ArbeitnowConnector(),
         GreenhouseConnector(),
+        LeverConnector(),
     ]
     if ReedConnector.is_available():
         connectors.append(ReedConnector())
