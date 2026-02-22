@@ -17,6 +17,8 @@ def apply_hard_filters(jobs: list[Job], prefs: Preferences) -> list[Job]:
             continue
         if prefs.locations and not _matches_location(j, prefs.locations, prefs.country):
             continue
+        if not prefs.locations and prefs.country and not _matches_country(j, prefs.country):
+            continue
         if prefs.min_salary is not None and not _meets_salary(j, prefs.min_salary):
             continue
         if prefs.seniority_levels and not _matches_seniority(j, prefs.seniority_levels):
@@ -53,6 +55,15 @@ def _matches_remote(job: Job, wanted: list[str]) -> bool:
         if w == "onsite" and job_remote in ("onsite", ""):
             return True
     return False
+
+
+def _matches_country(job: Job, country: str) -> bool:
+    """Filter by country when no specific city is set. Allows worldwide/global jobs through."""
+    job_loc = job.location.lower()
+    if not job_loc or job_loc in ("worldwide", "anywhere", "global", "remote"):
+        return True
+    aliases = _country_aliases(country.lower())
+    return any(alias in job_loc for alias in aliases)
 
 
 def _matches_location(job: Job, locations: list[str], country: str = "") -> bool:

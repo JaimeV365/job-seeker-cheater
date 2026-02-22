@@ -7,7 +7,7 @@ from pathlib import Path
 import streamlit as st
 
 from src.cv.parser import parse_cv
-from src.cv.entities import build_profile
+from src.cv.entities import build_profile, _load_skills_dict
 from src.matching.dedup import deduplicate
 from src.matching.explainer import explain_match
 from src.matching.filters import apply_hard_filters
@@ -15,6 +15,8 @@ from src.matching.scorer import score_jobs
 from src.models.preferences import Preferences
 from src.models.profile import Profile
 from src.sources.normalizer import fetch_all_jobs, get_all_connectors
+from src.sources.remotive import RemotiveConnector
+from src.sources.arbeitnow import ArbeitnowConnector
 from src.sources.reed import ReedConnector
 from src.sources.adzuna import AdzunaConnector
 from src.sources.lever import LeverConnector
@@ -58,19 +60,34 @@ header [data-testid="stToolbar"] {display: none;}
 h1, h2, h3 { font-family: 'Fredoka One', cursive; color: var(--deep-blue); }
 
 .hero-title {
-    font-family: 'Fredoka One', cursive;
-    font-size: 4.5rem; color: var(--deep-blue);
-    margin-bottom: 0; line-height: 1.05;
-    letter-spacing: -2px;
+    font-family: 'Fredoka One', cursive !important;
+    font-size: 5rem !important; color: var(--deep-blue) !important;
+    margin-bottom: 0 !important; line-height: 1.05 !important;
+    letter-spacing: -2px !important;
 }
 @media (min-width: 768px) {
-    .hero-title { font-size: 6rem; }
+    .hero-title { font-size: 7rem !important; }
 }
-.hero-cheater { color: var(--bordeaux); }
+.hero-cheater { color: var(--bordeaux) !important; }
 .hero-tagline {
-    font-family: 'Nunito', sans-serif;
-    font-size: 1.4rem; color: var(--slate);
+    font-family: 'Nunito', sans-serif !important;
+    font-size: 1.5rem !important; color: var(--slate) !important;
     margin-top: 0.3rem; margin-bottom: 1rem;
+}
+
+/* Bigger tabs */
+button[data-baseweb="tab"] {
+    font-size: 1.1rem !important;
+    font-weight: 700 !important;
+    padding: 0.8rem 1.5rem !important;
+    font-family: 'Nunito', sans-serif !important;
+}
+[data-baseweb="tab-list"] {
+    gap: 0 !important;
+}
+[data-baseweb="tab-list"] button {
+    flex: 1 !important;
+    justify-content: center !important;
 }
 
 .job-card {
@@ -293,9 +310,11 @@ with tab_cv:
             if file_key in st.session_state:
                 continue
 
-            with st.spinner(f"Parsing **{uploaded_file.name}** locally..."):
+            with st.status(f"Parsing {uploaded_file.name}...", expanded=True) as parse_status:
+                st.write("Extracting text from your CV...")
                 try:
                     raw_text = parse_cv(uploaded_file.name, uploaded_file.read())
+                    st.write("Detecting skills, experience, and role hints...")
                     profile_part = build_profile(raw_text)
 
                     for s in profile_part.skills:
@@ -314,8 +333,12 @@ with tab_cv:
 
                     st.session_state[file_key] = True
                     new_files_parsed = True
+                    parse_status.update(
+                        label=f"Parsed {uploaded_file.name} — {len(profile_part.skills)} skills found",
+                        state="complete",
+                    )
                 except Exception as e:
-                    st.error(f"Failed to parse {uploaded_file.name}: {e}")
+                    parse_status.update(label=f"Failed: {e}", state="error")
 
         if new_files_parsed:
             existing_raw = st.session_state.profile.raw_text if not st.session_state.profile.is_empty else ""
@@ -340,15 +363,38 @@ with tab_cv:
         st.success(f"CV parsed! **{len(profile.skills)}** skills detected. "
                    "Edit them below, then move to the **Preferences** tab.")
 
+        # Build a broad options list: detected skills + seed list
+        seed = _load_skills_dict()
+        all_known = set()
+        for cat_skills in seed.values():
+            all_known.update(s.lower() for s in cat_skills)
+        all_known.update(s.lower() for s in profile.skills)
+        skill_options = sorted(all_known)
+
         current_skills = list(profile.skills)
+        current_lower = [s.lower() for s in current_skills]
+        default_skills = [s for s in skill_options if s in current_lower]
+
         edited_skills = st.multiselect(
-            "Your skills (remove irrelevant ones, type to add new)",
-            options=current_skills,
-            default=current_skills,
-            help="Click the X to remove a skill. Type a new skill name and press Enter to add it.",
+            "Your skills (remove irrelevant ones, search to add from 200+ known skills)",
+            options=skill_options,
+            default=default_skills,
+            help="Click X to remove. Start typing to search and add skills from the list.",
             key="skill_editor",
         )
-        if set(edited_skills) != set(current_skills):
+
+        # Custom skill input for skills not in the seed list
+        new_skill = st.text_input(
+            "Add a custom skill not in the list above",
+            placeholder="e.g. qualtrics, medallia, customer journey mapping",
+            key="custom_skill_input",
+        )
+        if new_skill:
+            for s in [x.strip().lower() for x in new_skill.split(",") if x.strip()]:
+                if s and s not in edited_skills:
+                    edited_skills.append(s)
+
+        if set(edited_skills) != set(current_lower):
             st.session_state.profile = Profile(
                 raw_text=profile.raw_text,
                 skills=edited_skills,
@@ -410,7 +456,7 @@ with tab_prefs:
             placeholder="e.g. London, Manchester, Edinburgh",
         )
 
-    col_a, col_b, col_c = st.columns(3)
+    col_a, col_b = st.columns(2)
     with col_a:
         REMOTE_OPTIONS = ["Remote", "Hybrid", "On-site"]
         remote_defaults = [
@@ -425,6 +471,20 @@ with tab_prefs:
             help="Leave empty = all types. Select specific ones to filter.",
         )
     with col_b:
+        CONTRACT_OPTIONS = ["Full-time", "Part-time", "Contract", "Temporary"]
+        ct_map_rev = {"full_time": "Full-time", "part_time": "Part-time",
+                      "contract": "Contract", "temporary": "Temporary"}
+        ct_defaults = [ct_map_rev.get(c, c) for c in prefs.contract_types if c]
+        contract_types = st.multiselect(
+            "Contract type",
+            CONTRACT_OPTIONS,
+            default=[c for c in ct_defaults if c in CONTRACT_OPTIONS],
+            placeholder="Any (leave empty)",
+            help="Leave empty = all types.",
+        )
+
+    col_c, col_d, col_e = st.columns(3)
+    with col_c:
         SENIORITY_OPTIONS = ["Junior", "Mid", "Senior", "Lead", "Executive"]
         sen_defaults = [s.title() for s in prefs.seniority_levels if s]
         seniority_levels = st.multiselect(
@@ -434,11 +494,12 @@ with tab_prefs:
             placeholder="Any (leave empty)",
             help="Leave empty = all levels. Select specific ones to filter.",
         )
-    with col_c:
+    with col_d:
         min_salary = st.number_input(
             "Min salary (annual)", min_value=0,
             value=int(prefs.min_salary) if prefs.min_salary else 0, step=5000,
         )
+    with col_e:
         industries = st.text_input(
             "Industries (optional)",
             value=", ".join(prefs.industries),
@@ -466,6 +527,8 @@ with tab_prefs:
         remote_map = {"Remote": "remote", "Hybrid": "hybrid", "On-site": "onsite"}
         seniority_map = {"Junior": "junior", "Mid": "mid", "Senior": "senior",
                          "Lead": "lead", "Executive": "executive"}
+        ct_map = {"Full-time": "full_time", "Part-time": "part_time",
+                  "Contract": "contract", "Temporary": "temporary"}
         new_prefs = Preferences(
             target_titles=[t.strip() for t in target_titles.split(",") if t.strip()],
             required_skills=[s.strip().lower() for s in required_skills.split(",") if s.strip()],
@@ -473,6 +536,7 @@ with tab_prefs:
             locations=[loc.strip() for loc in locations.split(",") if loc.strip()],
             country=COUNTRY_MAP.get(country_name, ""),
             remote_types=[remote_map[r] for r in remote_types],
+            contract_types=[ct_map[c] for c in contract_types],
             seniority_levels=[seniority_map[s] for s in seniority_levels],
             min_salary=float(min_salary) if min_salary > 0 else None,
             industries=[i.strip().lower() for i in industries.split(",") if i.strip()],
@@ -487,76 +551,75 @@ with tab_prefs:
 with tab_search:
     st.caption("Fetches from public job APIs only. No personal data is sent.")
 
-    reed_available = ReedConnector.is_available()
-    adzuna_available = AdzunaConnector.is_available()
-
-    all_source_options = ["Remotive", "Arbeitnow", "Greenhouse", "Lever"]
-    if reed_available:
-        all_source_options.append("Reed")
-    if adzuna_available:
-        all_source_options.append("Adzuna")
-
-    default_sources = ["Remotive", "Arbeitnow"]
-    if reed_available:
-        default_sources.append("Reed")
-    if adzuna_available:
-        default_sources.append("Adzuna")
-
+    ALL_SOURCES = ["Remotive", "Arbeitnow", "Greenhouse", "Lever", "Reed", "Adzuna"]
     selected_sources = st.multiselect(
         "Job sources to search",
-        all_source_options,
-        default=default_sources,
+        ALL_SOURCES,
+        default=ALL_SOURCES,
         help=(
             "**Remotive** -- remote-first worldwide | "
             "**Arbeitnow** -- European & remote | "
             "**Greenhouse** -- tech company boards | "
             "**Lever** -- tech company boards | "
-            + ("**Reed** -- UK's #1 job board | " if reed_available else "")
-            + ("**Adzuna** -- UK/US/EU/AU and more" if adzuna_available else "")
+            "**Reed** -- UK's #1 (free API key) | "
+            "**Adzuna** -- UK/US/EU/AU (free API key)"
         ),
     )
 
-    # Company boards config
+    # Inline API key setup for Reed/Adzuna
+    reed_available = ReedConnector.is_available()
+    adzuna_available = AdzunaConnector.is_available()
+
+    if ("Reed" in selected_sources and not reed_available) or \
+       ("Adzuna" in selected_sources and not adzuna_available):
+        with st.expander("API keys needed for Reed / Adzuna (free to get, takes 2 minutes)", expanded=True):
+            col_k1, col_k2 = st.columns(2)
+            with col_k1:
+                if not reed_available:
+                    st.caption("[Get a free Reed key](https://www.reed.co.uk/developers/Jobseeker)")
+                    reed_key_input = st.text_input("Reed API Key", type="password", key="reed_key_inline")
+            with col_k2:
+                if not adzuna_available:
+                    st.caption("[Get free Adzuna keys](https://developer.adzuna.com/signup)")
+                    adzuna_id_input = st.text_input("Adzuna App ID", key="adzuna_id_inline")
+                    adzuna_key_input = st.text_input("Adzuna App Key", type="password", key="adzuna_key_inline")
+            if st.button("Save keys"):
+                new_keys = _load_api_keys()
+                if not reed_available and reed_key_input:
+                    new_keys["REED_API_KEY"] = reed_key_input
+                if not adzuna_available:
+                    if adzuna_id_input:
+                        new_keys["ADZUNA_APP_ID"] = adzuna_id_input
+                    if adzuna_key_input:
+                        new_keys["ADZUNA_APP_KEY"] = adzuna_key_input
+                _save_api_keys(new_keys)
+                _apply_api_keys(new_keys)
+                st.success("Keys saved! They'll work from now on.")
+                st.rerun()
+
     with st.expander("Configure company career boards (Greenhouse & Lever)"):
         st.caption(
-            "Many companies use **Greenhouse** or **Lever** to host their career pages. "
-            "Add company slugs below to search their boards directly. "
-            "Find the slug from the URL: e.g. `boards.greenhouse.io/vodafone` → slug is `vodafone`."
+            "Add company slugs to search their boards. "
+            "Find the slug from the URL: `boards.greenhouse.io/vodafone` → `vodafone`"
         )
         col_gh, col_lv = st.columns(2)
         with col_gh:
             gh_slugs_text = st.text_area(
-                "Greenhouse company slugs (one per line)",
+                "Greenhouse slugs (one per line)",
                 value="\n".join(GreenhouseConnector().slugs),
-                height=120,
-                help="e.g. vodafone, gsk, costco",
+                height=100,
             )
         with col_lv:
             lv_slugs_text = st.text_area(
-                "Lever company slugs (one per line)",
+                "Lever slugs (one per line)",
                 value="\n".join(LeverConnector().slugs),
-                height=120,
-                help="e.g. netflix, spotify, cloudflare",
+                height=100,
             )
 
-    if not reed_available or not adzuna_available:
-        missing = []
-        if not reed_available:
-            missing.append("**Reed.co.uk** (UK's #1)")
-        if not adzuna_available:
-            missing.append("**Adzuna** (UK/US/EU/AU)")
-        st.markdown(
-            f'<div class="api-hint">Want more sources? '
-            f'Add free API keys in the sidebar (click ☰ top-left) to unlock: '
-            f'{" and ".join(missing)}.</div>',
-            unsafe_allow_html=True,
-        )
-
     st.caption(
-        "**About Indeed & LinkedIn:** These platforms don't offer free public APIs "
-        "and scraping violates their terms of service. Reed and Adzuna are excellent "
-        "UK/international alternatives. For specific companies, add their Greenhouse "
-        "or Lever slugs above."
+        "**Indeed & LinkedIn** don't offer free public APIs. "
+        "Reed and Adzuna are excellent alternatives. "
+        "For specific companies, add their Greenhouse or Lever slugs above."
     )
 
     fetch_btn = st.button("Fetch & Match Jobs", type="primary", use_container_width=True)
@@ -566,67 +629,71 @@ with tab_search:
             st.warning("Upload your CV first for personalised ranking.")
 
         prefs_obj = st.session_state.preferences
+        kw = " ".join(prefs_obj.target_titles[:3]) if prefs_obj.target_titles else ""
+        loc = prefs_obj.locations[0] if prefs_obj.locations else ""
+        country = prefs_obj.country or "UK"
 
         gh_slugs = [s.strip() for s in gh_slugs_text.strip().split("\n") if s.strip()] if gh_slugs_text else []
         lv_slugs = [s.strip() for s in lv_slugs_text.strip().split("\n") if s.strip()] if lv_slugs_text else []
 
-        source_map = {
-            "Remotive": "remotive", "Arbeitnow": "arbeitnow",
-            "Greenhouse": "greenhouse", "Lever": "lever",
-            "Reed": "reed", "Adzuna": "adzuna",
-        }
-
         connectors = []
+        skipped = []
         for s in selected_sources:
-            s_name = source_map.get(s, "")
-            if s_name == "greenhouse":
+            if s == "Remotive":
+                connectors.append(RemotiveConnector(search=kw))
+            elif s == "Arbeitnow":
+                connectors.append(ArbeitnowConnector())
+            elif s == "Greenhouse":
                 connectors.append(GreenhouseConnector(slugs=gh_slugs))
-            elif s_name == "lever":
+            elif s == "Lever":
                 connectors.append(LeverConnector(slugs=lv_slugs))
-            elif s_name == "reed":
-                kw = " ".join(prefs_obj.target_titles[:3]) if prefs_obj.target_titles else ""
-                loc = prefs_obj.locations[0] if prefs_obj.locations else ""
-                connectors.append(ReedConnector(keywords=kw, location=loc))
-            elif s_name == "adzuna":
-                kw = " ".join(prefs_obj.target_titles[:3]) if prefs_obj.target_titles else ""
-                loc = prefs_obj.locations[0] if prefs_obj.locations else ""
-                country = prefs_obj.country or "UK"
-                connectors.append(AdzunaConnector(keywords=kw, location=loc, country=country))
-                for extra_country in prefs_obj.also_remote_in:
-                    if extra_country != country:
-                        connectors.append(AdzunaConnector(keywords=kw, country=extra_country))
-            else:
-                for c in get_all_connectors():
-                    if c.name == s_name:
-                        connectors.append(c)
-                        break
+            elif s == "Reed":
+                if ReedConnector.is_available():
+                    connectors.append(ReedConnector(keywords=kw, location=loc))
+                else:
+                    skipped.append("Reed (no API key)")
+            elif s == "Adzuna":
+                if AdzunaConnector.is_available():
+                    connectors.append(AdzunaConnector(keywords=kw, location=loc, country=country))
+                    for extra_country in prefs_obj.also_remote_in:
+                        if extra_country != country:
+                            connectors.append(AdzunaConnector(keywords=kw, country=extra_country))
+                else:
+                    skipped.append("Adzuna (no API key)")
 
-        with st.spinner("Fetching jobs from public APIs... This may take 15-30 seconds."):
+        if skipped:
+            st.warning(f"Skipped: {', '.join(skipped)}. Add free API keys above to enable them.")
+
+        with st.status("Searching for jobs...", expanded=True) as status:
+            st.write("Fetching from public job APIs...")
             try:
                 jobs = fetch_all_jobs(connectors)
+                st.write(f"Found {len(jobs)} raw listings. Deduplicating...")
                 jobs = deduplicate(jobs)
                 st.session_state.jobs = jobs
+                st.write(f"{len(jobs)} unique jobs after dedup.")
             except Exception as e:
                 st.error(f"Error fetching jobs: {e}")
                 jobs = []
 
-        if jobs and not st.session_state.profile.is_empty:
-            with st.spinner("Ranking matches..."):
+            if jobs and not st.session_state.profile.is_empty:
+                st.write("Filtering and ranking matches against your CV...")
                 profile_obj = st.session_state.profile
                 filtered = apply_hard_filters(jobs, prefs_obj)
+                st.write(f"{len(filtered)} jobs passed your filters (from {len(jobs)} total).")
                 scored = score_jobs(filtered, profile_obj, prefs_obj)
                 results = []
                 for job, score, sub_scores in scored:
                     explanation = explain_match(job, profile_obj, prefs_obj, sub_scores)
                     results.append((job, score, sub_scores, explanation))
                 st.session_state.scored_results = results
-            st.success(f"Done! **{len(results)} matches** found. Check the **Results** tab.")
-        elif jobs:
-            results = [(j, 0.0, {}, {"reasons": ["Upload CV for personalised scoring"], "gaps": []}) for j in jobs]
-            st.session_state.scored_results = results
-            st.info(f"Found {len(results)} jobs. Upload a CV for ranked results!")
-        else:
-            st.warning("No jobs found. Try different sources or broaden your preferences.")
+                status.update(label=f"Done! {len(results)} matches found.", state="complete")
+            elif jobs:
+                results = [(j, 0.0, {}, {"reasons": ["Upload CV for personalised scoring"], "gaps": []}) for j in jobs]
+                st.session_state.scored_results = results
+                status.update(label=f"Found {len(results)} jobs (upload CV for ranking).", state="complete")
+            else:
+                status.update(label="No jobs found. Try different sources or broaden preferences.", state="error")
 
 # ===== TAB 4: Results =====
 with tab_results:
@@ -678,37 +745,43 @@ with tab_results:
         st.caption(f"Showing {len(filtered_results)} of {len(results)}")
 
         for job, score, sub_scores, explanation in filtered_results[:50]:
+            import html as html_mod
             score_pct = int(score * 100)
             reasons = explanation.get("reasons", [])
             gaps = explanation.get("gaps", [])
 
-            st.markdown(f"""
-            <div class="job-card">
-                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                    <div style="flex: 1;">
-                        <h3>{job.title}</h3>
-                        <span class="company">{job.company}</span>
-                        <div class="meta">
-                            {job.location or "Not specified"}
-                            {"&nbsp; | &nbsp;" + job.remote_type.title() if job.remote_type else ""}
-                            {"&nbsp; | &nbsp;" + job.display_salary if job.display_salary else ""}
-                            &nbsp; | &nbsp; {job.source}
-                        </div>
-                    </div>
-                    <div class="score-badge">{score_pct}%</div>
-                </div>
-            """, unsafe_allow_html=True)
+            safe_title = html_mod.escape(job.title)
+            safe_company = html_mod.escape(job.company)
+            safe_location = html_mod.escape(job.location or "Not specified")
+            safe_tags = " ".join(
+                f'<span class="skill-tag">{html_mod.escape(t)}</span>' for t in job.tags[:8]
+            ) if job.tags else ""
+            reasons_html = "".join(
+                f'<div class="match-reason">✅ {html_mod.escape(r)}</div>' for r in reasons[:3]
+            )
+            gaps_html = "".join(
+                f'<div class="match-gap">⚠️ {html_mod.escape(g)}</div>' for g in gaps[:2]
+            )
 
-            if job.tags:
-                st.markdown(
-                    " ".join(f'<span class="skill-tag">{t}</span>' for t in job.tags[:8]),
-                    unsafe_allow_html=True,
-                )
-            for r in reasons[:3]:
-                st.markdown(f'<div class="match-reason">✅ {r}</div>', unsafe_allow_html=True)
-            for g in gaps[:2]:
-                st.markdown(f'<div class="match-gap">⚠️ {g}</div>', unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
+            card_html = f"""<div class="job-card">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+    <div style="flex:1;">
+      <h3>{safe_title}</h3>
+      <span class="company">{safe_company}</span>
+      <div class="meta">
+        {safe_location}
+        {"&nbsp;|&nbsp;" + job.remote_type.title() if job.remote_type else ""}
+        {"&nbsp;|&nbsp;" + html_mod.escape(job.display_salary) if job.display_salary else ""}
+        &nbsp;|&nbsp; {html_mod.escape(job.source)}
+      </div>
+    </div>
+    <div class="score-badge">{score_pct}%</div>
+  </div>
+  {safe_tags}
+  {reasons_html}
+  {gaps_html}
+</div>"""
+            st.markdown(card_html, unsafe_allow_html=True)
 
             c1, c2 = st.columns([1, 5])
             with c1:

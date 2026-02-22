@@ -12,6 +12,7 @@ class Preferences:
     country: str = ""  # ISO-style: "UK", "US", "DE", "CA", etc.
     remote_types: list[str] = field(default_factory=list)  # ["remote", "hybrid", "onsite"]
     seniority_levels: list[str] = field(default_factory=list)  # ["senior", "lead"]
+    contract_types: list[str] = field(default_factory=list)  # ["full_time", "part_time", "contract", "temporary"]
     min_salary: float | None = None
     salary_currency: str = "USD"
     industries: list[str] = field(default_factory=list)
@@ -35,6 +36,7 @@ class Preferences:
             "country": self.country,
             "remote_types": self.remote_types,
             "seniority_levels": self.seniority_levels,
+            "contract_types": self.contract_types,
             "min_salary": self.min_salary,
             "salary_currency": self.salary_currency,
             "industries": self.industries,

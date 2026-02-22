@@ -13,9 +13,16 @@ API_URL = "https://remotive.com/api/remote-jobs"
 class RemotiveConnector(BaseConnector):
     name = "remotive"
 
+    def __init__(self, search: str = ""):
+        self.search = search
+
     def fetch_jobs(self) -> list[Job]:
+        params = {}
+        if self.search:
+            params["search"] = self.search
+
         with SafeHttpClient() as client:
-            resp = client.get(API_URL)
+            resp = client.get(API_URL, params=params)
             resp.raise_for_status()
             data = resp.json()
 
